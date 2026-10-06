@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>音效测试台</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0e1116;
+    --panel: #171b22;
+    --panel-2: #1f2530;
+    --line: #2c3442;
+    --text: #e8ecf2;
+    --muted: #9aa5b5;
+    --accent: #f0b54a;
+    --accent-ink: #1a1306;
+    --ok: #4cc38a;
+    --bad: #ef6b6b;
+    --ann: #b48cf2;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    padding: 20px 16px 48px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 18px; margin: 0 0 10px; color: var(--accent); }
+  p.sub { margin: 0 0 16px; color: var(--muted); }
+  button {
+    font: inherit; color: var(--text); background: var(--panel-2);
+    border: 2px solid var(--line); border-radius: var(--radius);
+    padding: 10px 12px; cursor: pointer; min-height: 48px;
+    transition: border-color .12s, background .12s, transform .05s;
+  }
+  button:hover { border-color: #4a5568; }
+  button:active { transform: translateY(1px); }
+  button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  #unlock {
+    display: block; width: 100%; font-size: 26px; font-weight: 700;
+    padding: 18px; min-height: 76px; margin-bottom: 14px;
+    background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+  }
+  #unlock.on { background: #163626; color: var(--ok); border-color: var(--ok); }
+  #unlock.fail { background: #3a1717; color: var(--bad); border-color: var(--bad); }
+  .status {
+    display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 12px 14px; margin-bottom: 16px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  }
+  .status b { font-variant-numeric: tabular-nums; }
+  .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: var(--bad); margin-right: 6px; vertical-align: -1px; }
+  .dot.on { background: var(--ok); }
+  section {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 14px; margin-bottom: 16px;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .music button { min-width: 96px; }
+  .music button.cur { border-color: var(--accent); background: #2f2614; }
+  .sliders { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 24px; }
+  .sliders label { display: grid; grid-template-columns: 4.5em 1fr 3.5em; align-items: center; gap: 10px; }
+  .sliders output { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .grid button { text-align: left; display: flex; flex-direction: column; gap: 2px; }
+  .grid button .zh { font-size: 17px; font-weight: 600; }
+  .grid button .en { font-size: 13px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; }
+  .grid button.ann { border-left: 6px solid var(--ann); }
+  .grid button.flash { border-color: var(--ok); background: #183224; }
+  .grid button.drop { border-color: var(--bad); }
+  .group + .group { margin-top: 14px; }
+  .group h3 { font-size: 15px; margin: 0 0 8px; color: var(--muted); font-weight: 600; }
+  .tools button { font-weight: 600; }
+  #log {
+    margin: 12px 0 0; padding: 10px 12px; min-height: 3em; max-height: 220px; overflow: auto;
+    background: #0a0c10; border-radius: 8px; color: #c9d3e0;
+    font: 14px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all;
+  }
+  .legend { color: var(--muted); font-size: 14px; margin-top: 10px; }
+  .legend i { display: inline-block; width: 6px; height: 14px; background: var(--ann); vertical-align: -2px; margin-right: 6px; }
+  @media (max-width: 520px) {
+    body { padding: 14px 16px 40px; }
+    .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #unlock { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+<button id="unlock" type="button">启用声音</button>
+
+<h1>音效测试台</h1>
+<p class="sub">所有声音均为运行时合成，无音频文件。先点上方“启用声音”，再试各项。</p>
+
+<div class="status" aria-live="polite">
+  <span><span id="dot" class="dot"></span><b id="st">未启用</b></span>
+  <span>活跃声部：<b id="voices">0</b> / 24</span>
+  <span>当前音乐：<b id="track">无</b></span>
+  <span>音效数量：<b id="count">0</b></span>
+  <span>内部错误：<b id="errs">0</b></span>
+</div>
+
+<section>
+  <h2>背景音乐</h2>
+  <div class="row music" id="music">
+    <button type="button" data-track="menu">主菜单</button>
+    <button type="button" data-track="battle">对战</button>
+    <button type="button" data-track="victory">胜利</button>
+    <button type="button" data-track="defeat">失败</button>
+    <button type="button" data-track="">停止</button>
+  </div>
+</section>
+
+<section>
+  <h2>音量</h2>
+  <div class="sliders">
+    <label>总音量 <input id="v-master" type="range" min="0" max="1" step="0.01"><output id="o-master"></output></label>
+    <label>音乐 <input id="v-music" type="range" min="0" max="1" step="0.01"><output id="o-music"></output></label>
+    <label>音效 <input id="v-sfx" type="range" min="0" max="1" step="0.01"><output id="o-sfx"></output></label>
+  </div>
+  <div class="sliders" style="margin-top:14px">
+    <label>声像 <input id="p-pan" type="range" min="-1" max="1" step="0.05" value="0"><output id="o-pan">0</output></label>
+    <label>音高 <input id="p-pitch" type="range" min="0.5" max="2" step="0.05" value="1"><output id="o-pitch">1</output></label>
+    <label>单次音量 <input id="p-vol" type="range" min="0" max="1" step="0.05" value="1"><output id="o-vol">1</output></label>
+  </div>
+</section>
+
+<section class="tools">
+  <h2>测试工具</h2>
+  <div class="row">
+    <button type="button" id="stress">压力测试（2 秒 200 个）</button>
+    <button type="button" id="spatial">位置测试（远近左右）</button>
+    <button type="button" id="all">依次播放全部</button>
+  </div>
+  <div id="log"></div>
+</section>
+
+<section>
+  <h2>音效</h2>
+  <div id="groups"></div>
+  <div class="legend"><i></i>紫色边条为播报类：不受 24 声部上限限制，播放时音乐自动压低。</div>
+</section>
+
+<script type="module">
+import { audio, AudioEngine } from '../src/audio/audio.js';
+
+const $ = (id) => document.getElementById(id);
+const NAMES = AudioEngine.SOUND_NAMES;
+const ANN = new Set(['first_blood', 'double_kill', 'triple_kill', 'quadra_kill', 'penta_kill', 'legendary', 'victory', 'defeat', 'tower_lost', 'ally_killed']);
+
+const ZH = {
+  ui_click: '点击', ui_hover: '悬停', ui_buy: '界面购买', ui_sell: '出售', ui_error: '错误提示',
+  ui_open: '打开面板', ui_close: '关闭面板', skill_up: '技能升级', countdown: '倒计时', game_start: '游戏开始',
+  swing: '挥砍', hit_melee: '近战命中', hit_heavy: '重击', arrow_shoot: '射箭', arrow_hit: '箭矢命中',
+  gun_shot: '枪击', magic_shoot: '法术弹', magic_hit: '法术命中', crit: '暴击',
+  fireball: '火球', explosion: '爆炸', burn: '灼烧', ice_cast: '冰霜施法', ice_hit: '冰霜命中', freeze: '冰冻',
+  heal: '治疗', shield: '护盾', dash: '冲刺', blink: '闪现', stun: '眩晕', knockup: '击飞', slam: '重砸',
+  howl: '嚎叫', bell: '钟声', chain: '锁链', whirl: '旋风', buff: '增益', wind: '疾风', thunder: '雷击',
+  meteor: '陨石', root: '禁锢',
+  tower_shot: '防御塔射击', tower_hit: '防御塔受击', tower_destroy: '防御塔摧毁', crystal_destroy: '水晶摧毁',
+  minion_spawn: '小兵出发', minion_die: '小兵死亡', hero_die: '英雄阵亡', monster_roar: '野怪咆哮',
+  dragon_roar: '巨龙咆哮', monster_die: '野怪死亡',
+  gold: '金币', level_up: '升级', recall_start: '回城开始', recall_end: '回城完成', respawn: '复活', buy: '购买装备',
+  kill: '击杀', first_blood: '第一滴血', double_kill: '双杀', triple_kill: '三杀', quadra_kill: '四杀',
+  penta_kill: '五杀', legendary: '超神', ally_killed: '队友阵亡', enemy_tower_down: '摧毁敌塔',
+  tower_lost: '我方塔被毁', victory: '胜利', defeat: '失败',
+};
+const GROUPS = [
+  ['界面', ['ui_click', 'ui_hover', 'ui_buy', 'ui_sell', 'ui_error', 'ui_open', 'ui_close', 'skill_up', 'countdown', 'game_start']],
+  ['基础战斗', ['swing', 'hit_melee', 'hit_heavy', 'arrow_shoot', 'arrow_hit', 'gun_shot', 'magic_shoot', 'magic_hit', 'crit']],
+  ['技能', ['fireball', 'explosion', 'burn', 'ice_cast', 'ice_hit', 'freeze', 'heal', 'shield', 'dash', 'blink', 'stun', 'knockup', 'slam', 'howl', 'bell', 'chain', 'whirl', 'buff', 'wind', 'thunder', 'meteor', 'root']],
+  ['建筑与单位', ['tower_shot', 'tower_hit', 'tower_destroy', 'crystal_destroy', 'minion_spawn', 'minion_die', 'hero_die', 'monster_roar', 'dragon_roar', 'monster_die']],
+  ['经济与成长', ['gold', 'level_up', 'recall_start', 'recall_end', 'respawn', 'buy']],
+  ['播报（纯音乐，无人声）', ['kill', 'first_blood', 'double_kill', 'triple_kill', 'quadra_kill', 'penta_kill', 'legendary', 'ally_killed', 'enemy_tower_down', 'tower_lost', 'victory', 'defeat']],
+];
+
+const logEl = $('log');
+function log(msg) {
+  const t = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  logEl.textContent = `[${t}] ${msg}\n` + logEl.textContent.slice(0, 4000);
+}
+
+/* ---------- 启用 ---------- */
+async function unlock() {
+  const ok = await audio.unlock();
+  const b = $('unlock');
+  if (ok) {
+    b.textContent = '声音已启用';
+    b.className = 'on';
+  } else if (!audio.ready) {
+    b.textContent = '启用失败：浏览器不支持或被拦截，请再点一次';
+    b.className = 'fail';
+  }
+  return ok;
+}
+$('unlock').addEventListener('click', () => {
+  unlock().then((ok) => log(ok ? '已启用声音' : '启用失败'));
+});
+
+/* ---------- 音效按钮 ---------- */
+const btns = new Map();
+const shown = new Set();
+const host = $('groups');
+function addGroup(title, names) {
+  const g = document.createElement('div');
+  g.className = 'group';
+  const h = document.createElement('h3');
+  h.textContent = `${title}（${names.length}）`;
+  const grid = document.createElement('div');
+  grid.className = 'grid';
+  for (const n of names) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.name = n;
+    if (ANN.has(n)) b.classList.add('ann');
+    b.innerHTML = `<span class="zh"></span><span class="en"></span>`;
+    b.querySelector('.zh').textContent = ZH[n] || n;
+    b.querySelector('.en').textContent = n;
+    grid.appendChild(b);
+    btns.set(n, b);
+    shown.add(n);
+  }
+  g.append(h, grid);
+  host.appendChild(g);
+}
+for (const [title, list] of GROUPS) {
+  const names = list.filter((n) => NAMES.includes(n));
+  if (names.length) addGroup(title, names);
+}
+const rest = NAMES.filter((n) => !shown.has(n));
+if (rest.length) addGroup('其他', rest);
+$('count').textContent = NAMES.length;
+
+function opts() {
+  return { pan: +$('p-pan').value, pitch: +$('p-pitch').value, volume: +$('p-vol').value };
+}
+function flash(name, ok) {
+  const b = btns.get(name);
+  if (!b) return;
+  const cls = ok ? 'flash' : 'drop';
+  b.classList.add(cls);
+  setTimeout(() => b.classList.remove(cls), 220);
+}
+function fire(name, o) {
+  const ok = audio.play(name, o);
+  flash(name, ok);
+  return ok;
+}
+host.addEventListener('click', (ev) => {
+  const b = ev.target.closest('button[data-name]');
+  if (!b) return;
+  const name = b.dataset.name;
+  // 每个按钮都会尝试解锁（同一用户手势内），然后播放
+  if (audio.ready) {
+    if (!fire(name, opts())) log(`${name} 未播放（限频或声部已满）`);
+  } else {
+    unlock().then((ok) => ok && fire(name, opts()));
+  }
+});
+
+/* ---------- 音乐 ---------- */
+let curTrack = null;
+function markTrack() {
+  for (const b of $('music').querySelectorAll('button')) b.classList.toggle('cur', (b.dataset.track || null) === curTrack);
+  $('track').textContent = { menu: '主菜单', battle: '对战', victory: '胜利', defeat: '失败' }[curTrack] || '无';
+}
+$('music').addEventListener('click', (ev) => {
+  const b = ev.target.closest('button');
+  if (!b) return;
+  const t = b.dataset.track || null;
+  audio.unlock();
+  // 胜利/失败是一次性乐曲：先清空再播放，方便重复试听
+  if (t === 'victory' || t === 'defeat') audio.playMusic(null);
+  audio.playMusic(t);
+  curTrack = t;
+  markTrack();
+  log(t ? `音乐：${b.textContent}` : '音乐：停止');
+});
+markTrack();
+
+/* ---------- 音量 ---------- */
+const vols = audio.getVolumes();
+for (const k of ['master', 'music', 'sfx']) {
+  const inp = $('v-' + k);
+  const out = $('o-' + k);
+  inp.value = vols[k];
+  out.textContent = Math.round(vols[k] * 100) + '%';
+  inp.addEventListener('input', () => {
+    audio.setVolumes({ [k]: +inp.value });
+    out.textContent = Math.round(inp.value * 100) + '%';
+  });
+}
+for (const k of ['pan', 'pitch', 'vol']) {
+  const inp = $('p-' + k);
+  inp.addEventListener('input', () => ($('o-' + k).textContent = (+inp.value).toFixed(2).replace(/\.?0+$/, '') || '0'));
+}
+
+/* ---------- 测试工具 ---------- */
+let busy = 0;
+function stop() {
+  clearInterval(busy);
+  busy = 0;
+}
+$('stress').addEventListener('click', async () => {
+  if (!(await unlock())) return;
+  stop();
+  let i = 0, ok = 0, maxV = 0;
+  const t0 = performance.now();
+  busy = setInterval(() => {
+    // 计时器可能被合并，按已过时间补足，保证 2 秒内发满 200 次
+    const target = Math.min(200, Math.ceil(((performance.now() - t0) / 2000) * 200));
+    while (i < target) {
+      const n = NAMES[(Math.random() * NAMES.length) | 0];
+      if (fire(n, { pan: Math.random() * 2 - 1, volume: 0.4 + Math.random() * 0.6, pitch: 0.8 + Math.random() * 0.4 })) ok++;
+      i++;
+      maxV = Math.max(maxV, audio.activeVoices);
+    }
+    if (i >= 200) {
+      stop();
+      log(`压力测试：请求 200 个，实际发声 ${ok} 个（其余被限频或声部上限拦下），最多同时 ${maxV} 个声部（播报类可超出 24），用时 ${((performance.now() - t0) / 1000).toFixed(2)} 秒`);
+    }
+  }, 10);
+});
+
+$('spatial').addEventListener('click', async () => {
+  if (!(await unlock())) return;
+  stop();
+  // 听者在原点；8 内满音量，45 外无声，左右按 dx/30
+  const steps = [
+    ['原点（满音量居中）', 0, 0], ['左侧 20', -20, 0], ['右侧 30', 30, 0],
+    ['前方 40（很轻）', 0, 40], ['右侧 50（应无声）', 50, 0],
+  ];
+  let k = 0;
+  const go = () => {
+    const [label, x, y] = steps[k];
+    const ok = audio.playAt('hit_melee', x, y, 0, 0);
+    log(`位置测试 ${label}：${ok ? '已播放' : '未播放'}`);
+    if (++k >= steps.length) stop();
+  };
+  go();
+  busy = setInterval(go, 700);
+});
+
+$('all').addEventListener('click', async () => {
+  if (!(await unlock())) return;
+  stop();
+  const LONG = { bell: 2300, crystal_destroy: 2600, victory: 3200, defeat: 3200, dragon_roar: 1700, penta_kill: 2600, legendary: 2600 };
+  let k = 0;
+  const next = () => {
+    if (k >= NAMES.length) {
+      busy = 0;
+      log('全部播放完毕');
+      return;
+    }
+    const n = NAMES[k++];
+    fire(n, opts());
+    log(`播放 ${ZH[n] || n}（${n}）`);
+    busy = setTimeout(next, LONG[n] || (ANN.has(n) ? 1800 : 650));
+  };
+  busy = setTimeout(next, 0);
+});
+
+/* ---------- 状态刷新 ---------- */
+setInterval(() => {
+  const r = audio.ready;
+  $('dot').className = 'dot' + (r ? ' on' : '');
+  $('st').textContent = r ? '已启用' : audio.ctx ? '已挂起（点任意按钮恢复）' : '未启用';
+  $('voices').textContent = audio.activeVoices;
+  $('errs').textContent = audio.errors;
+  if (audio.errors && audio.lastError && !window.__shownErr) {
+    window.__shownErr = true;
+    log('内部错误：' + (audio.lastError && audio.lastError.message || audio.lastError));
+  }
+}, 200);
+
+// 供调试
+window.audio = audio;
+</script>
+</body>
+</html>

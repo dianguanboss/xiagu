@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>模型检视台</title>
+<!--
+  《峡谷之巅》单位模型检视页。
+  update(state) 字段（全部可选）：
+    t 秒、dt 帧间隔、moving、moveSpeed（定步频）
+    act 'attack'|'cast'|null、actT 已进行秒数、actDur 总时长、castSlot 0/1/2（2 为大招）、attackIdx 第几次普攻
+    dead、deadT 死亡后秒数、stunned、airborne（抬高由渲染器做）、channel 引导、recalling 回城
+  操作：左键拖拽旋转，右键（或 Shift+左键）拖拽平移，滚轮缩放。
+-->
+<style>
+  :root { --bg: #11151c; --panel: rgba(18, 22, 30, 0.86); --text: #e8ecf2; --muted: #9aa4b2; --accent: #ffd166; --bad: #ff5a5a; --ok: #6ee7a8; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; overflow: hidden; }
+  #view { position: fixed; inset: 0; }
+  #bar { position: fixed; top: 8px; left: 8px; right: 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; pointer-events: none; }
+  #bar > * { pointer-events: auto; }
+  button { background: #263042; color: var(--text); border: 1px solid #3a4760; border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  button:hover { background: #31405a; }
+  button.on { background: var(--accent); color: #1a1a1a; border-color: var(--accent); font-weight: 600; }
+  .sep { width: 1px; height: 22px; background: #3a4760; margin: 0 4px; }
+  label.chk { background: var(--panel); padding: 4px 8px; border-radius: 6px; user-select: none; }
+  #stats { position: fixed; left: 8px; bottom: 8px; background: var(--panel); padding: 8px 10px; border-radius: 8px; min-width: 210px; }
+  #stats b { color: var(--accent); }
+  #counts { position: fixed; right: 8px; top: 92px; bottom: 8px; width: 230px; overflow: auto; background: var(--panel); padding: 8px 10px; border-radius: 8px; }
+  #counts h4 { margin: 8px 0 4px; color: var(--accent); font-size: 13px; }
+  #counts .row { display: flex; justify-content: space-between; color: var(--muted); }
+  #counts .row span:last-child { color: var(--text); font-variant-numeric: tabular-nums; }
+  #counts .row.bad span:last-child { color: var(--bad); font-weight: 700; }
+  #err { position: fixed; left: 50%; transform: translateX(-50%); bottom: 8px; background: #5a1d1d; color: #ffd6d6; padding: 6px 10px; border-radius: 6px; display: none; max-width: 60vw; }
+  .lbl { position: fixed; transform: translate(-50%, -100%); padding: 1px 6px; border-radius: 4px; background: rgba(0, 0, 0, 0.55); color: #fff; font-size: 12px; white-space: nowrap; pointer-events: none; }
+  @media (max-width: 700px) { #counts { display: none; } }
+</style>
+<script type="importmap">{ "imports": { "three": "../lib/three.module.min.js" } }</script>
+</head>
+<body>
+<div id="view"></div>
+<div id="bar">
+  <span id="acts"></span>
+  <span class="sep"></span>
+  <span id="cams"></span>
+  <span class="sep"></span>
+  <label class="chk"><input type="checkbox" id="spin"> 自动转身</label>
+  <label class="chk"><input type="checkbox" id="slow"> 慢放</label>
+  <label class="chk"><input type="checkbox" id="pause"> 暂停</label>
+  <label class="chk"><input type="checkbox" id="labels" checked> 名称</label>
+  <label class="chk"><input type="checkbox" id="cnt" checked> 网格统计</label>
+  <label class="chk">只看 <select id="only">
+    <option value="">全部</option><option>英雄</option><option>小兵</option><option>野怪</option><option>首领</option><option>建筑</option>
+  </select></label>
+  <button id="stress">满场压测</button>
+</div>
+<div id="stats"></div>
+<div id="counts"></div>
+<div id="err"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import {
+  createHeroModel, createMinionModel, createMonsterModel, createTowerModel,
+  createCrystalModel, createFountainModel, countMeshes, TEAM_COLORS,
+} from '../src/render/models/index.js';
+import { HEROES } from '../src/data/heroes.js';
+
+// ---------- 场景 ----------
+const view = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+view.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#9fb6c9');
+scene.fog = new THREE.Fog('#9fb6c9', 120, 260);
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 600);
+
+scene.add(new THREE.HemisphereLight('#dfefff', '#4b5a3c', 1.1));
+const sun = new THREE.DirectionalLight('#fff4e0', 2.0);
+sun.position.set(-30, 60, 35);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+const sc = sun.shadow.camera;
+sc.left = -60; sc.right = 60; sc.top = 60; sc.bottom = -60; sc.near = 1; sc.far = 200;
+sun.shadow.bias = -0.0004;
+scene.add(sun, sun.target);
+
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshLambertMaterial({ color: '#6f8a5a' }));
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+const grid = new THREE.GridHelper(200, 100, '#4d6340', '#5f7a4e');
+grid.position.y = 0.01;
+grid.material.transparent = true; grid.material.opacity = 0.35;
+scene.add(grid);
+
+// ---------- 模型清单 ----------
+const show = new THREE.Group(), stressG = new THREE.Group();
+scene.add(show, stressG);
+stressG.visible = false;
+const showList = [], stressList = [];
+
+// kind: hero/minion/monster/boss/structure，决定动作时长和能否被击飞
+const ACT_DUR = { hero: 0.55, minion: 0.6, monster: 0.8, boss: 1.5, structure: 0.5 };
+const LIMIT = { hero: 40, minion: 10, monster: 15, boss: 40 };
+
+function place(list, parent, model, name, cat, kind, x, z, ry = 0) {
+  const st = {
+    t: 0, dt: 0, moving: false, moveSpeed: 7, act: null, actT: 0, actDur: 0.5, castSlot: 0, attackIdx: 0,
+    dead: false, deadT: 0, stunned: false, airborne: false, channel: false, recalling: false,
+  };
+  model.root.position.set(x, 0, z);
+  model.root.rotation.y = ry;
+  parent.add(model.root);
+  const e = { model, name, cat, kind, st, x, z, ry, meshes: countMeshes(model.root), err: 0, lbl: null };
+  list.push(e);
+  return e;
+}
+
+const HERO_DEFS = HEROES.length ? HEROES : [];
+// 第一排：英雄
+HERO_DEFS.forEach((h, i) => place(showList, show, createHeroModel(h, 1), h.name + '·' + h.model, '英雄', 'hero', (i - 4.5) * 3.2, 14));
+// 第二排：小兵（两队）
+['melee', 'ranged', 'siege', 'super'].forEach((m, i) => {
+  const nm = { melee: '近战兵', ranged: '远程兵', siege: '炮车', super: '超级兵' }[m];
+  place(showList, show, createMinionModel(m, 1), '蓝·' + nm, '小兵', 'minion', -13 + i * 3, 7.5);
+  place(showList, show, createMinionModel(m, 2), '红·' + nm, '小兵', 'minion', 4 + i * 3, 7.5);
+});
+// 第三排：野怪（按体型留间距）
+const MON = [
+  ['wolf', '幽影狼', 2.2], ['wolfBig', '幽影狼王', 3], ['beetle', '岩甲虫', 2.4], ['bird', '赤羽鸟', 2.8], ['birdBig', '赤羽鸟王', 4],
+  ['boar', '獠牙野猪', 3.4], ['redLizard', '赤焰蜥王', 4.4], ['blueGolem', '蓝晶巨像', 4.2], ['drake', '炎鳞龙', 9], ['guardian', '远古守卫', 8.5],
+];
+{
+  const total = MON.reduce((a, m) => a + m[2], 0);
+  let x = -total / 2;
+  for (const [id, nm, w] of MON) {
+    const boss = id === 'drake' || id === 'guardian';
+    place(showList, show, createMonsterModel(id), nm, boss ? '首领' : '野怪', boss ? 'boss' : 'monster', x + w / 2, boss ? -2 : 0);
+    x += w;
+  }
+}
+// 第四排：防御塔（两队三档）+ 水晶
+['outer', 'inner', 'high'].forEach((tier, i) => {
+  const nm = { outer: '一塔', inner: '二塔', high: '高地塔' }[tier];
+  place(showList, show, createTowerModel(tier, 1), '蓝·' + nm, '建筑', 'structure', -27 + i * 6, -14);
+  place(showList, show, createTowerModel(tier, 2), '红·' + nm, '建筑', 'structure', 9 + i * 6, -14);
+});
+place(showList, show, createCrystalModel(1), '蓝·水晶', '建筑', 'structure', -6, -14);
+place(showList, show, createCrystalModel(2), '红·水晶', '建筑', 'structure', 3.5, -14);
+// 第五排：泉水
+place(showList, show, createFountainModel(1), '蓝·泉水', '建筑', 'structure', -13, -36);
+place(showList, show, createFountainModel(2), '红·泉水', '建筑', 'structure', 13, -36);
+
+// ---------- 满场压测：10 英雄 + 80 小兵 + 20 野怪 + 22 塔 ----------
+let stressBuilt = false;
+function buildStress() {
+  if (stressBuilt) return;
+  stressBuilt = true;
+  let n = 0;
+  const pos = (cols, sp, z0) => { const i = n++; return [((i % cols) - (cols - 1) / 2) * sp, z0 - Math.floor(i / cols) * sp]; };
+  n = 0;
+  for (let i = 0; i < 10; i++) { const [x, z] = pos(10, 3.2, 30); place(stressList, stressG, createHeroModel(HERO_DEFS[i % HERO_DEFS.length], 1 + (i % 2)), '', '英雄', 'hero', x, z); }
+  n = 0;
+  const MT = ['melee', 'melee', 'melee', 'ranged', 'ranged', 'ranged', 'siege', 'super'];
+  for (let i = 0; i < 80; i++) { const [x, z] = pos(20, 2.2, 25); place(stressList, stressG, createMinionModel(MT[i % 8], 1 + (i % 2)), '', '小兵', 'minion', x, z); }
+  n = 0;
+  const MM = ['wolf', 'wolf', 'wolfBig', 'beetle', 'beetle', 'beetle', 'bird', 'bird', 'birdBig', 'boar', 'redLizard', 'blueGolem', 'wolf', 'wolf', 'wolfBig', 'beetle', 'bird', 'boar', 'drake', 'guardian'];
+  for (let i = 0; i < 20; i++) { const [x, z] = pos(10, 5.5, 13); place(stressList, stressG, createMonsterModel(MM[i]), '', '野怪', 'monster', x, z); }
+  n = 0;
+  const TT = ['outer', 'inner', 'high'];
+  for (let i = 0; i < 22; i++) { const [x, z] = pos(11, 7, 0); place(stressList, stressG, createTowerModel(TT[i % 3], 1 + (i % 2)), '', '建筑', 'structure', x, z); }
+  stressG.position.z = -10;
+}
+
+// ---------- 名称标签 ----------
+for (const e of showList) {
+  const d = document.createElement('div');
+  d.className = 'lbl';
+  d.textContent = e.name;
+  document.body.appendChild(d);
+  e.lbl = d;
+}
+
+// ---------- 网格数统计 ----------
+function renderCounts() {
+  const box = document.getElementById('counts');
+  const groups = {};
+  for (const e of showList) (groups[e.cat] = groups[e.cat] || []).push(e);
+  let html = '';
+  for (const cat of ['英雄', '小兵', '野怪', '首领', '建筑']) {
+    const arr = groups[cat];
+    if (!arr) continue;
+    const max = Math.max(...arr.map((e) => e.meshes));
+    html += `<h4>${cat}（最多 ${max}${LIMIT[arr[0].kind] ? ' / 上限 ' + LIMIT[arr[0].kind] : ''}）</h4>`;
+    for (const e of arr) {
+      const lim = LIMIT[e.kind];
+      html += `<div class="row${lim && e.meshes > lim ? ' bad' : ''}"><span>${e.name}</span><span>${e.meshes}</span></div>`;
+    }
+  }
+  box.innerHTML = html;
+}
+renderCounts();
+
+// ---------- 动作按钮 ----------
+const ACTS = [
+  ['idle', '待机'], ['run', '跑步'], ['attack', '普攻'], ['cast', '施法'], ['ult', '大招'],
+  ['stun', '眩晕'], ['air', '击飞'], ['recall', '回城'], ['channel', '引导'], ['dead', '死亡'],
+];
+let mode = 'idle', modeT = 0;
+const actBox = document.getElementById('acts');
+const actBtns = {};
+for (const [id, nm] of ACTS) {
+  const b = document.createElement('button');
+  b.textContent = nm;
+  b.onclick = () => setMode(id);
+  actBox.appendChild(b);
+  actBtns[id] = b;
+}
+function setMode(id) {
+  mode = id; modeT = 0;
+  for (const k in actBtns) actBtns[k].classList.toggle('on', k === id);
+}
+setMode('idle');
+
+// 按当前动作填写状态
+function drive(e, t, dt) {
+  const s = e.st;
+  s.t = t; s.dt = dt;
+  s.moving = mode === 'run';
+  s.stunned = mode === 'stun';
+  s.recalling = mode === 'recall';
+  s.channel = mode === 'channel';
+  s.dead = mode === 'dead';
+  s.deadT = s.dead ? modeT : 0;
+  if (mode === 'attack' || mode === 'cast' || mode === 'ult') {
+    const base = ACT_DUR[e.kind];
+    const dur = base * (mode === 'ult' ? 1.6 : mode === 'cast' ? 1.25 : 1);
+    const per = dur + 0.45;
+    const n = Math.floor(modeT / per), tt = modeT - n * per;
+    s.act = tt < dur ? (mode === 'attack' ? 'attack' : 'cast') : null;
+    s.actT = tt; s.actDur = dur; s.attackIdx = n;
+    s.castSlot = mode === 'ult' ? 2 : n % 2;
+  } else { s.act = null; s.actT = 0; }
+  let lift = 0;
+  if (mode === 'air' && e.kind !== 'structure') {
+    const per = 1.7, tt = modeT % per;
+    s.airborne = tt < 1.0;
+    lift = s.airborne ? Math.sin(tt * Math.PI) * 1.6 : 0;
+  } else s.airborne = false;
+  e.model.root.position.y = lift;
+}
+
+// ---------- 相机：拖拽旋转、滚轮缩放、右键平移 ----------
+const cam = { target: new THREE.Vector3(0, 1.5, 0), yaw: 0, pitch: 0.75, dist: 52 };
+function applyCam() {
+  cam.pitch = Math.max(0.05, Math.min(1.5, cam.pitch));
+  cam.dist = Math.max(2, Math.min(250, cam.dist));
+  const cp = Math.cos(cam.pitch);
+  camera.position.set(
+    cam.target.x + Math.sin(cam.yaw) * cp * cam.dist,
+    cam.target.y + Math.sin(cam.pitch) * cam.dist,
+    cam.target.z + Math.cos(cam.yaw) * cp * cam.dist,
+  );
+  camera.lookAt(cam.target);
+}
+const CAMS = [
+  ['全景', () => setCam(0, 1.5, -4, 0, 0.75, 64)],
+  ['英雄', () => setCam(0, 1.1, 14, 0, 0.32, 20)],
+  ['小兵', () => setCam(0, 0.8, 7.5, 0, 0.35, 18)],
+  ['野怪', () => setCam(0, 1.2, -1, 0, 0.4, 32)],
+  ['建筑', () => setCam(-6, 3, -18, 0, 0.35, 46)],
+  ['游戏俯视', () => setCam(0, 0, 10, 0, Math.PI / 3, 27)],
+];
+function setCam(x, y, z, yaw, pitch, dist) { cam.target.set(x, y, z); cam.yaw = yaw; cam.pitch = pitch; cam.dist = dist; applyCam(); }
+const camBox = document.getElementById('cams');
+for (const [nm, fn] of CAMS) { const b = document.createElement('button'); b.textContent = nm; b.onclick = fn; camBox.appendChild(b); }
+CAMS[0][1]();
+
+let drag = null;
+const cvs = renderer.domElement;
+cvs.addEventListener('contextmenu', (ev) => ev.preventDefault());
+cvs.addEventListener('pointerdown', (ev) => {
+  drag = { x: ev.clientX, y: ev.clientY, pan: ev.button === 2 || ev.shiftKey };
+  cvs.setPointerCapture(ev.pointerId);
+});
+cvs.addEventListener('pointermove', (ev) => {
+  if (!drag) return;
+  const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+  drag.x = ev.clientX; drag.y = ev.clientY;
+  if (drag.pan) {
+    const k = cam.dist * 0.0016;
+    const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+    cam.target.x += (-dx * cy - dy * sy) * k;
+    cam.target.z += (dx * sy - dy * cy) * k;
+  } else {
+    cam.yaw -= dx * 0.006;
+    cam.pitch += dy * 0.005;
+  }
+  applyCam();
+});
+cvs.addEventListener('pointerup', () => { drag = null; });
+cvs.addEventListener('wheel', (ev) => {
+  ev.preventDefault();
+  cam.dist *= Math.exp(ev.deltaY * 0.0012);
+  applyCam();
+}, { passive: false });
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---------- 开关 ----------
+const spinChk = document.getElementById('spin'), lblChk = document.getElementById('labels');
+const cntChk = document.getElementById('cnt'), onlySel = document.getElementById('only');
+cntChk.onchange = () => { document.getElementById('counts').style.display = cntChk.checked ? '' : 'none'; };
+if (innerWidth < 1100) { cntChk.checked = false; cntChk.onchange(); }
+// 只看某一类：其它类隐藏，方便近距离检查
+onlySel.onchange = () => {
+  for (const e of showList) e.model.root.visible = !onlySel.value || e.cat === onlySel.value;
+};
+const stressBtn = document.getElementById('stress');
+stressBtn.onclick = () => {
+  buildStress();
+  const on = !stressG.visible;
+  stressG.visible = on; show.visible = !on;
+  stressBtn.classList.toggle('on', on);
+  if (on) setCam(0, 0, 4, 0, 0.8, 75); else CAMS[0][1]();
+};
+
+// ---------- 主循环 ----------
+const errBox = document.getElementById('err');
+let errCount = 0;
+function reportErr(e, ex) {
+  errCount++;
+  if (e.err++ === 0) console.error('[模型更新出错]', e.name || e.cat, ex);
+  errBox.style.display = 'block';
+  errBox.textContent = `更新出错 ${errCount} 次（首个：${e.name || e.cat}：${ex && ex.message}）`;
+}
+addEventListener('error', (ev) => { errBox.style.display = 'block'; errBox.textContent = '脚本错误：' + ev.message; });
+
+const statsBox = document.getElementById('stats');
+const clock = new THREE.Clock();
+let t = 0, spinA = 0, fpsN = 0, fpsT = 0, fps = 0;
+const _v = new THREE.Vector3();
+
+function visibleMeshes(list) { let n = 0; for (const e of list) n += e.meshes; return n; }
+
+function frame() {
+  requestAnimationFrame(frame);
+  const slow = document.getElementById('slow').checked ? 0.25 : 1;
+  const paused = document.getElementById('pause').checked || window.__mv.freeze;
+  const dt = paused ? 0 : Math.min(0.1, clock.getDelta()) * slow;
+  if (paused) clock.getDelta();
+  t += dt; modeT += dt;
+  if (spinChk.checked) spinA += dt * 0.6;
+  const list = stressG.visible ? stressList : showList;
+  for (const e of list) {
+    if (paused) break;
+    drive(e, t, dt);
+    e.model.root.rotation.y = e.ry + (spinChk.checked ? spinA : 0);
+    try { e.model.update(e.st); } catch (ex) { reportErr(e, ex); }
+  }
+  renderer.render(scene, camera);
+
+  // 标签
+  const showLbl = lblChk.checked && show.visible;
+  for (const e of showList) {
+    if (!showLbl || !e.model.root.visible) { e.lbl.style.display = 'none'; continue; }
+    _v.set(e.x, e.model.height + 0.35 + e.model.root.position.y, e.z).project(camera);
+    if (_v.z > 1 || _v.z < -1) { e.lbl.style.display = 'none'; continue; }
+    e.lbl.style.display = 'block';
+    e.lbl.style.left = ((_v.x + 1) / 2 * innerWidth) + 'px';
+    e.lbl.style.top = ((1 - _v.y) / 2 * innerHeight) + 'px';
+  }
+
+  fpsN++; fpsT += dt;
+  if (fpsT >= 0.5) {
+    fps = fpsN / fpsT; fpsN = 0; fpsT = 0;
+    const info = renderer.info.render;
+    statsBox.innerHTML =
+      `FPS <b>${fps.toFixed(0)}</b>　模型 <b>${list.length}</b><br>` +
+      `总网格 <b>${visibleMeshes(list)}</b>　绘制调用 <b>${info.calls}</b><br>` +
+      `三角形 <b>${(info.triangles / 1000).toFixed(1)}k</b>　动作 <b>${actBtns[mode].textContent}</b>` +
+      (stressG.visible ? '<br>满场压测：10 英雄 / 80 小兵 / 20 野怪 / 22 塔' : '');
+  }
+}
+// 自查用（freeze=true 时主循环不再驱动动作，可手动摆姿势）
+window.__mv = { showList, stressList, setMode, setCam, scene, renderer, camera, TEAM_COLORS, freeze: false };
+frame();
+</script>
+</body>
+</html>
